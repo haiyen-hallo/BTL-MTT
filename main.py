@@ -18,6 +18,11 @@ class NetworkOptimizer:
         self.exporter = ResultExporter(output_dir)
         self._link_lookup = {}
         self._path_edges = defaultdict(set)
+    
+    @staticmethod
+    def _normalize_edge(u, v):
+        """Chuẩn hóa edge key thành tuple đã sort"""
+        return tuple(sorted((u, v)))
         
     def load_and_prepare(self, graph_path, demands_path):
         loader = DataLoader(graph_path, demands_path)
@@ -27,20 +32,26 @@ class NetworkOptimizer:
         mst_solver = MSTSolver(net.graph)
         mst = mst_solver.solve()
         mst_solver.export()
+        backup_links = mst_solver.get_backup_links()
+        self.exporter.save_backup_links(backup_links)
         return net, mst, demands
     
     def _build_lookups(self, results, calc):
         self._link_lookup = {
-            (min(e[0], e[1]), max(e[0], e[1])): {
-                'source': e[0], 'target': e[1], 'used': used,
-                'total': calc.cap[e], 'util': used / calc.cap[e]
+            self._normalize_edge(e[0], e[1]): {
+                'source': e[0], 
+                'target': e[1], 
+                'used': used,
+                'total': calc.cap[e], 
+                'utilization': used / calc.cap[e]
             } for e, used in calc.used.items() if used > 0
         }
         self._path_edges = defaultdict(set)
         for d_id, ok, path in results:
             if ok:
                 for i in range(len(path) - 1):
-                    self._path_edges[(min(path[i], path[i+1]), max(path[i], path[i+1]))].add(d_id)
+                    edge_key = self._normalize_edge(path[i], path[i+1])
+                    self._path_edges[edge_key].add(d_id)
     
     def run_routing(self, net, mst, demands, config_key, fcfs_accepted=None):
         cfg = CONFIG[config_key]
@@ -57,17 +68,24 @@ class NetworkOptimizer:
             accepted, results = calc.process_demands(demands)
             self._build_lookups(results, calc)
             
-            # Export Câu 1, 2, 3
+            # Export Câu 1, 2
             self.exporter.save_cau1(accepted, len(demands) - accepted, len(demands), cfg)
             self.exporter.save_cau2(pd.DataFrame({"demand_id": d, "path": p} for d, ok, p in results if ok))
             
-            links_df = pd.DataFrame({**l, "utilization": l['util']} for l in self._link_lookup.values()).sort_values('utilization', ascending=False)
-            high_util = sum(1 for l in self._link_lookup.values() if l['util'] >= 0.7)
-            utils = [l['util'] for l in self._link_lookup.values()]
-            self.exporter.save_cau3(high_util, links_df, {
-                "total_edges": len(calc.used), "used_edges": len(self._link_lookup),
-                "avg_utilization": sum(utils) / len(utils), "max_utilization": max(utils)
-            })
+            # Export Câu 3
+            links_df = pd.DataFrame(self._link_lookup.values()).sort_values('utilization', ascending=False)
+            utils = [l['utilization'] for l in self._link_lookup.values()]
+            
+            self.exporter.save_cau3(
+                count=sum(1 for u in utils if u >= 0.7),
+                df3=links_df,
+                stats={
+                    "total_edges": len(calc.used),
+                    "used_edges": len(self._link_lookup),
+                    "avg_utilization": sum(utils) / len(utils),
+                    "max_utilization": max(utils)
+                }
+            )
             print(f"✓ {accepted}/{len(demands)} accepted, {len(self._link_lookup)} links cached")
             return accepted, calc
         else:
@@ -83,34 +101,53 @@ class NetworkOptimizer:
     
     def query_link(self, source, target, graph):
         print(f"\n{'='*60}\nQUERY: Node {source} → {target}\n{'='*60}")
-        edge = (min(source, target), max(source, target))
-        link = self._link_lookup.get(edge)
+        
+        edge_key = self._normalize_edge(source, target)
+        link = self._link_lookup.get(edge_key)
+        
         if not link:
             print(f"⚠️  No traffic on link")
             return
-        demands = sorted(self._path_edges[edge])
+        
+        demands = sorted(self._path_edges[edge_key])
         dist = graph[source][target]['distance'] if graph.has_edge(source, target) else graph[target][source]['distance']
+        
+        # Danh sách metrics để hiển thị
+        metrics = [
+            ('Distance', f"{dist:.2f} km"),
+            ('Total Capacity', f"{link['total']:.2f}"),
+            ('Used (Flow)', f"{link['used']:.2f}"),
+            ('Remaining', f"{link['total'] - link['used']:.2f}"),
+            ('Utilization', f"{link['utilization']*100:.1f}%"),
+            ('Demands Count', len(demands)),
+            ('Demands Using', ', '.join(map(str, demands)))
+        ]
+        
         print(f"\n{'Metric':<20} {'Value'}\n{'-'*60}")
-        print(f"{'Distance':<20} {dist:.2f} km\n{'Total Capacity':<20} {link['total']:.2f}")
-        print(f"{'Used (Flow)':<20} {link['used']:.2f}\n{'Remaining':<20} {link['total'] - link['used']:.2f}")
-        print(f"{'Utilization':<20} {link['util']*100:.1f}%\n{'Demands Count':<20} {len(demands)}")
-        print(f"{'Demands Using':<20} {', '.join(map(str, demands))}\n{'-'*60}")
+        for metric, value in metrics:
+            print(f"{metric:<20} {value}")
+        print('-'*60)
     
     def interactive_query(self, graph):
         print(f"\n{'='*50}\nINTERACTIVE QUERY\n{'='*50}")
         max_node = max(graph.nodes())
+        
         while True:
             try:
                 inp = input(f"\nNodes (0-{max_node}) or 'q': ").strip()
-                if inp.lower() == 'q': break
+                if inp.lower() == 'q':
+                    break
+                
                 parts = inp.split()
                 if len(parts) != 2:
                     print("⚠️  Format: 'source target'")
                     continue
+                
                 s, t = int(parts[0]), int(parts[1])
                 if s not in graph.nodes() or t not in graph.nodes():
                     print(f"⚠️  Invalid nodes")
                     continue
+                
                 self.query_link(s, t, graph)
             except ValueError:
                 print("⚠️  Numbers only")
@@ -129,7 +166,7 @@ def main():
     viz.draw_topology(f"{opt.output_dir}/01_topology.png", show=False)
     viz.draw_mst(mst, f"{opt.output_dir}/02_mst.png", show=False)
     
-    high = sum(1 for l in opt._link_lookup.values() if l['util'] >= 0.7)
+    high = sum(1 for l in opt._link_lookup.values() if l['utilization'] >= 0.7)
     print(f"\n{'='*50}\nSUMMARY\n{'='*50}")
     print(f"FCFS:   {fcfs_accepted}/{len(demands)} ({100*fcfs_accepted/len(demands):.1f}%)")
     print(f"Hybrid: {hybrid_accepted}/{len(demands)} ({100*hybrid_accepted/len(demands):.1f}%)")
