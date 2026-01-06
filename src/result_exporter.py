@@ -22,7 +22,8 @@ class ResultExporter:
     def save_cau3(self, count, df3, stats):
         df_stats = pd.DataFrame([stats])
         df_stats['high_utilization_links'] = count
-        df3.to_csv(os.path.join(self.output_dir, 'cau3_high_links.csv'), index=False)
+        df3_high = df3[df3['utilization'] >= 0.7]
+        df3_high.to_csv(os.path.join(self.output_dir, 'cau3_high_links.csv'), index=False)
         df_stats.to_csv(os.path.join(self.output_dir, 'cau3_stats.csv'), index=False)
 
     def save_cau4(self, result, accepted_fcfs, total, params):
@@ -38,3 +39,7 @@ class ResultExporter:
 
     def save_best_demands(self, df):
         df.to_csv(os.path.join(self.output_dir, 'best_demands.csv'), index=False)
+
+    def save_backup_links(self, backup_links):
+        df = pd.DataFrame(backup_links)
+        df.to_csv(os.path.join(self.output_dir, 'backup.csv'), index=False)

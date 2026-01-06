@@ -10,6 +10,7 @@ class MSTSolver:
         self.mst = None
         self.backups = {}
         self.parent, self.depth, self.up, self.max_weight = {}, {}, {}, {}
+        self._backup_links_cache = None  # ← Cache để tránh tính lại
 
     def solve(self) -> nx.Graph:
         if not nx.is_connected(self.graph):
@@ -75,11 +76,23 @@ class MSTSolver:
     def _compute_backups(self):
         for u, v in self.graph.edges():
             if not self.mst.has_edge(u, v):
-                w, (mw, me) = self.graph[u][v]['distance'], self._find_max_on_path(u, v)
-                if me and w < mw:
+                w = self.graph[u][v]['distance']
+                mw, me = self._find_max_on_path(u, v)
+                if me:
                     key = tuple(sorted(me))
                     if key not in self.backups or w < self.backups[key][1]:
                         self.backups[key] = ((u, v), w)
+        
+        self._backup_links_cache = [
+            {
+                'orig_u': orig_u,
+                'orig_v': orig_v,
+                'backup_u': backup_edge[0],
+                'backup_v': backup_edge[1],
+                'cost': cost
+            }
+            for (orig_u, orig_v), (backup_edge, cost) in self.backups.items()
+        ]
 
     def handle_failure(self, node: int) -> Dict:
         if node not in self.mst.nodes():
@@ -116,14 +129,15 @@ class MSTSolver:
         print(f"{'✓' if success else '✗'} Node {node}: {len(applied)} fixes, {before:.2f}→{after:.2f} km")
         return {'success': success, 'applied': applied, 'before': round(before, 2), 'after': round(after, 2)}
 
-    def export(self, mst_csv: str = "mst.csv", backup_csv: str = "backups.csv"):
+    def get_backup_links(self) -> List[Dict]:
+        if self._backup_links_cache is None:
+            raise RuntimeError("Must call solve() before get_backup_links()")
+        return self._backup_links_cache
+
+    def export(self, mst_csv: str = "mst.csv"):
         os.makedirs("results", exist_ok=True)
         pd.DataFrame([{'u': u, 'v': v, 'dist': self.graph[u][v]['distance'], 
                        'in_mst': self.mst.has_edge(u, v)}
                       for u, v in self.graph.edges() if self.graph.has_edge(u, v)]
-                    ).to_csv(f"results/{mst_csv}", index=False)
-        pd.DataFrame([{'orig_u': u, 'orig_v': v, 'backup_u': b[0][0], 
-                       'backup_v': b[0][1], 'cost': b[1]}
-                      for (u, v), b in self.backups.items() if self.mst.has_edge(u, v)]
-                    ).to_csv(f"results/{backup_csv}", index=False)
-        print("✓ Exported")
+                     ).to_csv(f"results/{mst_csv}", index=False)
+        print("✓ Exported MST")

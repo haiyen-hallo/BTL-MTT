@@ -64,7 +64,7 @@ class CapacityCalculatorFCFS(CapacityAllocator):
 class CapacityCalculatorHybrid(CapacityAllocator):
     """Hybrid: Load balancing with multiple strategies"""
     
-    def __init__(self, graph, path_finder, capacity_multiplier: float = 1.5):
+    def __init__(self, graph, path_finder, capacity_multiplier: float = 1.0):
         super().__init__(graph, path_finder, capacity_multiplier)
     
     def _best_path(self, demand_id, bw):
